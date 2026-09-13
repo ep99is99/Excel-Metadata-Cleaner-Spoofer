@@ -1,0 +1,131 @@
+import os
+import random
+import zipfile
+import re
+import shutil
+from datetime import datetime, timedelta
+import xlwings as xw
+
+def puhdista_ja_lavasta_excel(input_path, output_path, author, kieli):
+    temp_dir = "temp_ultimate_xml_patch"
+    abs_input = os.path.abspath(input_path)
+    abs_output = os.path.abspath(output_path)
+    
+    app = None
+    try:
+        # 1. Käynnistetään aito Excel taustalla näkymättömästi
+        app = xw.App(visible=False, add_book=False)
+        
+        wb_vanha = app.books.open(abs_input)
+        wb_uusi = app.books.add() # Luodaan täysin puhdas Excel 365 -työkirja
+        
+        # Siirretään data puhtaasti välilehti kerrallaan
+        for idx, ws_vanha in enumerate(wb_vanha.sheets):
+            if idx == 0:
+                ws_uusi = wb_uusi.sheets[0]
+                ws_uusi.name = ws_vanha.name
+            else:
+                ws_uusi = wb_uusi.sheets.add(ws_vanha.name, after=wb_uusi.sheets[idx-1])
+            
+            # Luetaan pelkät arvot ja kaavat vanhasta tiedostosta
+            data_alue = ws_vanha.used_range
+            if data_alue.address != "$A$1" or data_alue.value is not None:
+                kaavat_ja_arvot = data_alue.formula
+                ws_uusi.range(data_alue.address).value = kaavat_ja_arvot
+                
+                # NATIIVI EXCEL-MUOTOILU (Vain teemaviittauksia, ei RGB-heksakoodeja)
+                otsikko = ws_uusi.range("A1").expand("right")
+                otsikko.font.bold = True
+                
+                # Asetetaan tekstin väriksi aito valkoinen teemaväri (ThemeColor 1 = White)
+                try:
+                    otsikko.api.Font.ThemeColor = 1 
+                except Exception:
+                    otsikko.font.color = (255, 255, 255)
+                
+                # KORJAUS: Ei käytetä RGB-arvoa, vaan asetetaan taustaväri suoraan teemalla!
+                # ThemeColor 5 on Excel 365:n uuden teeman standardisininen (Accent 1)
+                try:
+                    otsikko.api.Interior.ThemeColor = 5
+                except Exception:
+                    otsikko.color = (21, 96, 130) # Varamuotoilu jos COM-rajapinta estyy
+                
+                otsikko.api.HorizontalAlignment = -4108 # Keskitys
+                
+                # Luvut ja Valuuttamuotoilu aidossa suomalaisessa Excel-muodossa
+                viimeinen_rivi = ws_uusi.range("A1").end("down").row
+                lukualue = ws_uusi.range(f"B2:D{viimeinen_rivi}")
+                lukualue.number_format = '#,##0\\ "€"'
+                
+                # Summarivi
+                summarivi = ws_uusi.range(f"A{viimeinen_rivi}").expand("right")
+                summarivi.font.bold = True
+
+            # Inhimilliset sarakeleveydet murtoluvuilla
+            ws_uusi.autofit() 
+            ws_uusi.range("A:A").column_width = 14.82
+            ws_uusi.range("B:B").column_width = 17.09
+            ws_uusi.range("C:C").column_width = 15.09
+            ws_uusi.range("D:D").column_width = 14.82
+
+            # Inhimillinen kursorijälki
+            try:
+                ws_uusi.range("D9").select()
+            except Exception:
+                pass
+        
+        wb_uusi.save(abs_output)
+        wb_vanha.close()
+        wb_uusi.close()
+        app.quit()
+        app = None
+        
+        # 2. METATIETOJEN JA ZIP-AIKALEIMOJEN VIIMEISTELY
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+            
+        with zipfile.ZipFile(abs_output, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+            
+        core_path = os.path.join(temp_dir, "docProps", "core.xml")
+        if os.path.exists(core_path):
+            with open(core_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            content = re.sub(r'<dc:creator>.*?</dc:creator>', f'<dc:creator>{author}</dc:creator>', content)
+            content = re.sub(r'<cp:lastModifiedBy>.*?</cp:lastModifiedBy>', f'<cp:lastModifiedBy>{author}</cp:lastModifiedBy>', content)
+            
+            if "<dc:language>" not in content:
+                content = content.replace('</cp:coreProperties>', f'<dc:language>{kieli}</dc:language></cp:coreProperties>')
+                
+            content = re.sub(r'<cp:revision>.*?</cp:revision>', f'<cp:revision>{random.randint(6, 12)}</cp:revision>', content)
+            
+            nykyhetki = datetime.utcnow()
+            luonti_dt = nykyhetki - timedelta(days=random.randint(3, 5), hours=random.randint(2, 7), minutes=random.randint(5, 50))
+            muokkaus_dt = nykyhetki - timedelta(minutes=random.randint(4, 14))
+            
+            content = re.sub(r'<dcterms:created[^>]*>.*?</dcterms:created>', f'<dcterms:created xsi:type="dcterms:W3CDTF">{luonti_dt.strftime("%Y-%m-%dT%H:%M:%SZ")}</dcterms:created>', content)
+            content = re.sub(r'<dcterms:modified[^>]*>.*?</dcterms:modified>', f'<dcterms:modified xsi:type="dcterms:W3CDTF">{muokkaus_dt.strftime("%Y-%m-%dT%H:%M:%SZ")}</dcterms:modified>', content)
+            
+            with open(core_path, "w", encoding="utf-8") as f:
+                f.write(content)
+                
+        with zipfile.ZipFile(abs_output, 'w', zipfile.ZIP_DEFLATED) as zip_out:
+            for root, dirs, files in os.walk(temp_dir):
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(full_path, temp_dir)
+                    os.utime(full_path, (muokkaus_dt.timestamp(), muokkaus_dt.timestamp()))
+                    zip_out.write(full_path, rel_path)
+                    
+        return True
+    except Exception:
+        if app is not None:
+            try: wb_vanha.close(); wb_uusi.close()
+            except: pass
+            try: app.quit()
+            except: pass
+        return False
+    finally:
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
