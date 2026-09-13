@@ -1,0 +1,82 @@
+import sys
+import os
+
+bversio_dir = os.path.dirname(os.path.abspath(__file__))
+if bversio_dir not in sys.path:
+    sys.path.insert(0, bversio_dir)
+os.chdir(bversio_dir)
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+from convert import puhdista_ja_lavasta_excel
+
+class ExcelCleanerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Excel Spoofer - Versio B")
+        self.root.geometry("500x380")
+        self.root.resizable(False, False)
+        
+        self.valittu_tiedosto = ""
+        
+        tk.Label(root, text="1. Valitse puhdistettava Excel-tiedosto (.xlsx)", font=("Arial", 10, "bold")).pack(pady=(15,2))
+        self.btn_selaa = tk.Button(root, text="Selaa tiedostoa...", command=self.valitse_tiedosto, width=20)
+        self.btn_selaa.pack()
+        self.label_tiedosto = tk.Label(root, text="Ei tiedostoa valittuna", fg="gray", wraplength=450)
+        self.label_tiedosto.pack(pady=(2,10))
+        
+        tk.Label(root, text="2. Lavastettavat metatiedot", font=("Arial", 10, "bold")).pack(pady=5)
+        
+        tk.Label(root, text="Tekijän nimi (Author):").pack()
+        self.entry_author = tk.Entry(root, width=35)
+        self.entry_author.insert(0, "Käyttäjä")
+        self.entry_author.pack(pady=(0,10))
+        
+        tk.Label(root, text="Dokumentin kieli (Language):").pack()
+        self.combo_kieli = ttk.Combobox(root, values=["fi-FI", "en-US", "sv-SE"], width=12, state="readonly")
+        self.combo_kieli.set("fi-FI")
+        self.combo_kieli.pack(pady=(0,20))
+        
+        self.btn_puhdista = tk.Button(root, text="Aja Puhdistus", command=self.suorita_puhdistus, state=tk.DISABLED, width=30, bg="#2196F3", fg="white", font=("Arial", 10, "bold"))
+        self.btn_puhdista.pack(pady=10)
+
+    def valitse_tiedosto(self):
+        tiedostopolku = filedialog.askopenfilename(title="Valitse Excel-tiedosto", filetypes=[("Excel-tiedostot", "*.xlsx")])
+        if tiedostopolku:
+            self.valittu_tiedosto = tiedostopolku
+            self.label_tiedosto.config(text=os.path.basename(tiedostopolku), fg="black")
+            self.btn_puhdista.config(state=tk.NORMAL)
+
+    def suorita_puhdistus(self):
+        if not self.valittu_tiedosto:
+            return
+            
+        author_input = self.entry_author.get().strip()
+        kieli_input = self.combo_kieli.get()
+        
+        if not author_input:
+            messagebox.showwarning("Huomio", "Ole hyvä ja syötä tekijän nimi.")
+            return
+            
+        oletus_nimi = "versioB_" + os.path.basename(self.valittu_tiedosto)
+        tallennuspolku = filedialog.asksaveasfilename(
+            title="Tallenna uusi tiedosto nimellä",
+            initialfile=oletus_nimi,
+            filetypes=[("Excel-tiedostot", "*.xlsx")],
+            defaultextension=".xlsx"
+        )
+        
+        if tallennuspolku:
+            onnistui = puhdista_ja_lavasta_excel(self.valittu_tiedosto, tallennuspolku, author_input, kieli_input)
+            if onnistui:
+                messagebox.showinfo("Valmis", "Puhdistus suoritettu onnistuneesti!")
+                self.valittu_tiedosto = ""
+                self.label_tiedosto.config(text="Ei tiedostoa valittuna", fg="gray")
+                self.btn_puhdista.config(state=tk.DISABLED)
+            else:
+                messagebox.showerror("Virhe", "Puhdistus epäonnistui.")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ExcelCleanerApp(root)
+    root.mainloop()
